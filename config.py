@@ -14,6 +14,7 @@ Created on 2017-08-02 09:20
 DEBUG = False
 
 URLS = (
+    '/tip/(.*)', 'action.tip_action.TipAction',
     '/wechat/(.*)', 'action.wechat_action.WechatAction',
     '/(.*)', 'action.help.Help'
 )

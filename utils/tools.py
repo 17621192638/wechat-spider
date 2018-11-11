@@ -762,7 +762,7 @@ def seconds_to_h_m_s(seconds):
     m, s = divmod(seconds, 60)
     h, m = divmod(m, 60)
 
-    return '%02d:%02d:%02d'%(h, m, s)
+    return '%d小时%d分%d秒'%(h, m, s)
 
 ################################################
 def get_md5(source_str):

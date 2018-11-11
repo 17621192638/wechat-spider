@@ -24,7 +24,7 @@ if __name__ == '__main__':
     # 取微信号
     # sql = 'select t.name, t.keyword2 from TAB_IOPM_CLUES t where t.zero_id = 7 and t.first_id = 137 and t.second_id = 183'
     # accounts = db.find(sql)
-    accounts = ['广电时评', '广电独家', '常话短说', '爱奇艺行业速递']
+    accounts = ['骨朵网络影视']
     for account in accounts:
         account_id = ''
         account_name = account

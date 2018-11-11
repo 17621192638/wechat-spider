@@ -156,6 +156,20 @@ class WechatSogou():
         @result:
         '''
 
+        release_time = self.get_article_release_time(account_id, account)
+
+        if release_time:
+            log.debug("最近发文时间 %s"%release_time)
+
+            if release_time >= tools.get_current_date('%Y-%m-%d'):
+                return constance.UPDATE
+            else:
+                return constance.NOT_UPDATE
+
+        else:
+            return constance.ERROR
+
+    def get_article_release_time(self, account_id = '', account = ''):
         account_block = self.__get_account_blocks(account_id, account)
         if account_block == constance.VERIFICATION_CODE:
             return constance.VERIFICATION_CODE
@@ -166,15 +180,9 @@ class WechatSogou():
         if release_time:
             release_time = int(release_time)
             release_time = tools.timestamp_to_date(release_time)
-            log.debug("最近发文时间 %s"%release_time)
 
-            if release_time >= tools.get_current_date('%Y-%m-%d'):
-                return constance.UPDATE
-            else:
-                return constance.NOT_UPDATE
+        return release_time
 
-        else:
-            return constance.ERROR
 
 
 

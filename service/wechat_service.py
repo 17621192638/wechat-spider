@@ -18,16 +18,18 @@ from db.elastic_search import ES
 from base.wechat_sogou import WechatSogou
 from base.wechat_public_platform import WechatPublicPlatform
 from base import constance
+from db.redisdb import RedisDB
 import random
 
 SIZE = 100
 TIME_INTERVAL = 24 * 60 * 60
 
-CHECK_NEW_ARTICLE = int(tools.get_conf_value('config.conf', 'spider', 'only_today_msg'))  # 有新发布的文章才爬取
+CHECK_NEW_ARTICLE = False #int(tools.get_conf_value('config.conf', 'spider', 'only_today_msg'))  # 有新发布的文章才爬取
 
 class WechatService():
     _db = OracleDB()
     _es = ES()
+    _redisdb = RedisDB()
     _wechat_sogou = WechatSogou()
     _wechat_public_platform = WechatPublicPlatform()
 
@@ -49,42 +51,11 @@ class WechatService():
         pass
 
     def __load_todo_account(self):
-        if not WechatService._todo_accounts:
-            sql = ''
-            if not WechatService._is_all_done:
-                sql = '''
-                    select *
-                       from (select rownum r, t.id, t.domain, t.biz, t.name
-                               from TAB_IOPM_SITE t
-                              where t.biz is not null and mointor_status = 701 and (today_msg is null or today_msg = 0) and rownum < {size})
-                      where r >= {rownum}
-                    '''.format(rownum = WechatService._rownum, size = WechatService._rownum + SIZE)
-            else: # 今日公众号发布的新文章均已爬取
-                sql = '''
-                    select *
-                       from (select rownum r, t.id, t.domain, t.biz, t.name
-                               from TAB_IOPM_SITE t
-                              where t.biz is not null and mointor_status = 701 and rownum < {size})
-                      where r >= {rownum}
-                    '''.format(rownum = WechatService._rownum, size = WechatService._rownum + SIZE)
+        accounts = WechatService._redisdb.sget('wechat:account', count = 1)
 
-            print(sql)
-            results = WechatService._db.find(sql)
-            if not results:
-                if WechatService._rownum == 1:
-                    # 今日公众号发布的新文章均已爬取，爬虫休息，明日再爬
-                    WechatService._is_all_done = True  # 为了WeichatAction 设置休眠时间用
-                    # 取下一天的公众号
-                    self.__load_todo_account()
-
-                else:
-                    WechatService._is_done = True
-                    WechatService._rownum = 1
-                    self.__load_todo_account()
-
-            else:
-                WechatService. _todo_accounts = collections.deque(results) #  转为队列
-                WechatService._rownum += SIZE
+        for account in accounts:
+            account = eval(account)
+            WechatService._todo_accounts.append(account)
 
     def is_have_new_article(self, account_id, account_name, __biz):
         '''
@@ -178,56 +149,21 @@ class WechatService():
         @result: 返回biz, 是否已做完一圈 (biz, True)
         '''
 
-        while True:
-            if not WechatService._todo_accounts:
-                self.__load_todo_account()
+        if not WechatService._todo_accounts:
+            self.__load_todo_account()
 
-            next_account_info =  WechatService._todo_accounts.popleft()
-            next_account_id = next_account_info[2]
-            next_account_biz = next_account_info[3]
-            next_account_name = next_account_info[4]
+        if not WechatService._todo_accounts:
+            return None
 
-            next_account = next_account_id, next_account_biz, WechatService._is_done, WechatService._is_all_done
+        oralce_id, account_id, account_name, last_article_release_time, biz =  WechatService._todo_accounts.popleft()
+        next_account_id = account_id
+        next_account_biz = biz
+        next_account_name = account_name
 
-            if not WechatService._wechat_sogou_enable:
-                log.debug('搜狗微信不可用')
+        next_account = next_account_id, next_account_biz
 
-            if not WechatService._wechat_public_platform_enable:
-                log.debug('微信公众平台不可用')
-
-            # 不用检查是否发布新文章 直接跳出
-            if not CHECK_NEW_ARTICLE:
-                break
-
-            # 搜狗微信和微信公众平台均不可用 跳出
-            if not WechatService._wechat_sogou_enable and not WechatService._wechat_public_platform_enable:
-                break
-
-            # 使用检查新文章时，有一定的几率跳出， 采用微信客户端直接爬取，防止搜狗微信使用频繁出现验证码
-            if random.randint(1, 5) == 1:
-                log.debug('跳出 防止搜狗微信被封')
-                break
-
-            # 检查是今日是否有文章发布
-            result = self.is_have_new_article(next_account_id, next_account_name, next_account_biz)
-            if result == constance.UPDATE:
-                break
-            elif result == constance.NOT_UPDATE:
-                if WechatService._is_done: # 防止公众号都没更新， 产生死循环 都检查完一遍 发现都没更新  直接跳出
-                    break
-                else:
-                    # tools.delay_time(5)
-                    continue
-            elif result == constance.ERROR:
-                break
-            elif result == constance.VERIFICATION_CODE:
-                break
-            else: # 检查更新不可用 直接调用客户端爬取
-                break
-
-        # 重置_is_done与_is_all_done 状态
-        WechatService._is_done =  False
-        WechatService._is_all_done = False
+        sql = "update TAB_IOPM_SITE t set t.spider_status=602 where t.biz = '%s'"%(next_account_biz)
+        WechatService._db.update(sql)
 
         return next_account
 
@@ -274,9 +210,9 @@ class WechatService():
         total_msg = result.get('hits', {}).get('total', 0)
 
         if total_msg:
-            sql = "update TAB_IOPM_SITE t set t.today_msg = %d, t.total_msg = %d where t.biz = '%s'"%(today_msg, total_msg, __biz)
+            sql = "update TAB_IOPM_SITE t set t.today_msg = %d, t.total_msg = %d, t.spider_status=603 where t.biz = '%s'"%(today_msg, total_msg, __biz)
         else:
-            sql = "update TAB_IOPM_SITE t set t.today_msg = %d where t.biz = '%s'"%(today_msg, __biz)
+            sql = "update TAB_IOPM_SITE t set t.today_msg = %d, t.spider_status=603 where t.biz = '%s'"%(today_msg, __biz)
         print(sql)
         WechatService._db.update(sql)
 

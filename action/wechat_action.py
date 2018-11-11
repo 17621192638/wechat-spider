@@ -29,10 +29,10 @@ import random
 from service.wechat_service import WechatService
 
 
-MIN_SLEEP_TIME = 30000 # 每个历史列表、文章详情时间间隔  毫秒
-MAX_SLEEP_TIME = 65000
-MIN_WAIT_TIME = 1000 * 60 * 60 * 6 # 做完所有公众号后休息的时间，然后做下一轮
-MAX_WAIT_TIME = 1000 * 60 * 60 * 8
+MIN_SLEEP_TIME = 5000 # 每个历史列表、文章详情时间间隔  毫秒
+MAX_SLEEP_TIME = 10000
+MIN_WAIT_TIME = 10000# * 60 * 60 * 1 # 做完所有公众号后休息的时间，然后做下一轮
+MAX_WAIT_TIME = 10000 #* 60 * 60 * 2
 
 ONLY_TODAY_MSG = int(tools.get_conf_value('config.conf', 'spider', 'only_today_msg'))
 SPIDER_START_TIME = tools.get_conf_value('config.conf', 'spider', 'spider_start_time')
@@ -52,9 +52,6 @@ class WechatAction():
     _account_info = { # 用来缓存__biz 和 account_id的对应信息
         # '__biz' : 'account_id'
     }
-
-    _current_account_biz = ''
-    _current_aritcle_id = None
 
     def __init__(self):
         self._is_need_get_more = True # 是否需要获取更多文章。 当库中该条文章存在时，不需要获取更早的文章，默认库中已存在。如今天的文章库中已经存在了，如果爬虫一直在工作，说明昨天的文章也已经入库，增量试
@@ -128,44 +125,49 @@ class WechatAction():
         @result:
         '''
         is_done = False # 是否做完一轮
-        is_all_done = False # 是否全部做完（所有公众号当日的发布的信息均已采集）
+        url = None
 
-        if WechatAction._todo_urls:
-            url = WechatAction._todo_urls.popleft()
-        else:
-            # 做完一个公众号 更新其文章数
-            WechatAction._wechat_service.update_account_article_num(WechatAction._current_account_biz)
+        while WechatAction._todo_urls:
+            result = WechatAction._todo_urls.popleft()
+            if callable(result): # 为更新公众号已做完的回调
+                result() #执行回调
+            else:
+                url = result
 
+        if not url:
             # 跳转到下一个公众号
-            account_id, __biz, is_done, is_all_done = WechatAction._wechat_service.get_next_account()
-            WechatAction._account_info[__biz] = account_id or ''
+            account = WechatAction._wechat_service.get_next_account()
+            if account:
+                account_id, __biz = account
+                WechatAction._account_info[__biz] = account_id or ''
 
-
-            # url = 'http://mp.weixin.qq.com/mp/getmasssendmsg?__biz=%s#wechat_webview_type=1&wechat_redirect'%__biz
-            url = 'https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=%s&scene=124#wechat_redirect'%__biz
-            log.debug('''
-                下一个公众号 ： %s
-                '''%url)
+                url = 'https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=%s&scene=124#wechat_redirect'%__biz
+                log.debug('''
+                    下一个公众号 ： %s
+                    '''%url)
+            else:
+                is_done = True
 
         # 注入js脚本实现自动跳转
-        if is_all_done: # 当天文章均已爬取 下一天再爬
-            # 睡眠到下一天
-            sleep_time = self.get_next_day_time_interval()
-        elif is_done: # 做完一轮 休息
+        if is_done: # 做完一轮 休息
             sleep_time = self.get_wait_time()
         elif ONLY_TODAY_MSG and tools.get_current_date() < tools.get_current_date("%Y-%m-%d") + ' ' + SPIDER_START_TIME: # 只爬取今日文章且当前时间小于指定的开始时间，则休息不爬取，因为公众号下半夜很少发布文章
             sleep_time = self.get_spider_start_time_interval()
         else: # 做完一篇文章 间隔一段时间
             sleep_time = self.get_sleep_time()
 
+        tip_sleep_time = tools.seconds_to_h_m_s(sleep_time / 1000)
+        tip_next_start_time = tools.timestamp_to_date(tools.get_current_timestamp() + sleep_time / 1000)
+        if not url:
+            url = 'http://localhost:6210/tip/wait?sleep_time={}&next_start_time={}'.format(tip_sleep_time, tip_next_start_time)
+
         log.debug('''
             next_page_url : %s
             is_done:        %s
-            is_all_done:    %s
             sleep_time:     %s
             next_start_time %s
-            '''%(url, is_done, is_all_done, tools.seconds_to_h_m_s(sleep_time / 1000), tools.timestamp_to_date(tools.get_current_timestamp() + sleep_time / 1000)))
-        next_page = "<script>setTimeout(function(){window.location.href='%s';},%d);</script>"%(url, sleep_time)
+            '''%(url, is_done, tip_sleep_time, tip_next_start_time))
+        next_page = "下次刷新时间 %s<script>setTimeout(function(){window.location.href='%s';},%d);</script>"%(tip_next_start_time, url, sleep_time)
         return next_page
 
     def __parse_account_info(self, data, req_url):
@@ -177,7 +179,6 @@ class WechatAction():
         @result:
         '''
         __biz = tools.get_param(req_url, '__biz')
-        WechatAction._current_account_biz = __biz
 
         regex = 'id="nickname">(.*?)</strong>'
         account = tools.get_info(data, regex, fetch_one = True).strip()
@@ -212,7 +213,7 @@ class WechatAction():
         if not WechatAction._wechat_service.is_exist('wechat_account', __biz):
             WechatAction._wechat_service.add_account_info(account_info)
 
-    def __parse_article_list(self, article_list):
+    def __parse_article_list(self, article_list, req_url):
         '''
         @summary: 解析文章列表
         ---------
@@ -338,6 +339,10 @@ class WechatAction():
                 if not self._is_need_get_more:
                     break
 
+        # 将更新公众号为做完的回调加入到队列中
+        __biz = tools.get_param(req_url, '__biz') # 用于关联公众号
+        WechatAction._todo_urls.append(lambda: WechatAction._wechat_service.update_account_article_num(__biz))
+
     def get_article_list(self, data, req_url):
         '''
         @summary: 获取文章列表
@@ -365,7 +370,7 @@ class WechatAction():
                     regex = "msgList = '(.*?})';"
                     article_list = tools.get_info(data, regex, fetch_one = True)
                     article_list = article_list.replace('&quot;', '"')
-                    self.__parse_article_list(article_list)
+                    self.__parse_article_list(article_list, req_url)
 
                     #判断是否还有更多文章 没有跳转到下个公众号，有则下拉显示更多
                     regex = "can_msg_continue = '(\d)'"
@@ -388,7 +393,7 @@ class WechatAction():
                 else:# json格式
                     data = tools.get_json(data)
                     article_list = data.get('general_msg_list', {})
-                    self.__parse_article_list(article_list)
+                    self.__parse_article_list(article_list, req_url)
 
                     #判断是否还有更多文章 没有跳转到下个公众号，有则下拉显示更多
                     can_msg_continue = data.get('can_msg_continue')
@@ -422,8 +427,6 @@ class WechatAction():
             mid = tools.get_param(req_url, 'mid') or tools.get_param(req_url, 'appmsgid') # 图文消息id 同一天发布的图文消息 id一样
             idx = tools.get_param(req_url, 'idx') or tools.get_param(req_url, 'itemidx') # 第几条图文消息 从1开始
             article_id = mid + idx # 用mid和idx 拼接 确定唯一一篇文章 如mid = 2650492260  idx = 1，则article_id = 26504922601
-            WechatAction._current_aritcle_id = article_id # 记录当前文章的id 为获取评论信息时找对应的文章id使用
-            print('当前id' + WechatAction._current_aritcle_id)
             regex = '(<div class="rich_media_content ".*?)<script nonce'
             content = tools.get_info(data, regex, fetch_one = True)
             if content:
@@ -494,12 +497,10 @@ class WechatAction():
 
         req_url = req_url.replace('amp;', '')
 
-        # 2018-04-13 微信版本更新 地址中无mid与idx参数 article_id拼不出来
-        # mid = tools.get_param(req_url, 'mid') # 图文消息id 同一天发布的图文消息 id一样
-        # idx = tools.get_param(req_url, 'idx') # 第几条图文消息 从1开始
-        # article_id = mid + idx # 用mid和idx 拼接 确定唯一一篇文章 如mid = 2650492260  idx = 1，则article_id = 26504922601
-
-        article_id = WechatAction._current_aritcle_id # 直接取
+        # 2018-04-13 微信版本更新 地址中无mid与idx参数 需从data中取， req_url为data参数
+        mid = tools.get_param(req_url, 'mid') # 图文消息id 同一天发布的图文消息 id一样
+        idx = tools.get_param(req_url, 'idx') # 第几条图文消息 从1开始
+        article_id = mid + idx # 用mid和idx 拼接 确定唯一一篇文章 如mid = 2650492260  idx = 1，则article_id = 26504922601
 
         data = tools.get_json(data)
         read_num = data.get('appmsgstat', {}).get('read_num')
@@ -516,38 +517,32 @@ class WechatAction():
     def get_comment(self, data, req_url):
         log.debug('获取评论信息')
 
-        # req_url = req_url.replace('amp;', '')
-        # mid = tools.get_param(req_url, 'appmsgid') # 图文消息id 同一天发布的图文消息 id一样
-        # idx = tools.get_param(req_url, 'idx') # 第几条图文消息 从1开始
-        # # article_id = mid + idx # 用mid和idx 拼接 确定唯一一篇文章 如mid = 2650492260  idx = 1，则article_id = 26504922601
-        # article_id = WechatAction._current_aritcle_id # 直接取
+        req_url = req_url.replace('amp;', '')
+        mid = tools.get_param(req_url, 'appmsgid') # 图文消息id 同一天发布的图文消息 id一样
+        idx = tools.get_param(req_url, 'idx') # 第几条图文消息 从1开始
+        article_id = mid + idx # 用mid和idx 拼接 确定唯一一篇文章 如mid = 2650492260  idx = 1，则article_id = 26504922601
 
-        # data = tools.get_json(data)
-        # comment = data.get('elected_comment', []) # 精选留言
+        data = tools.get_json(data)
+        comment = data.get('elected_comment', []) # 精选留言
 
-        # # 缓存文章评论信息
-        # WechatAction._article_info[article_id]['comment'] = comment
+        # 缓存文章评论信息
+        WechatAction._article_info[article_id]['comment'] = comment
 
-        # WechatAction._wechat_service.add_article_info(WechatAction._article_info.pop(article_id))
+        WechatAction._wechat_service.add_article_info(WechatAction._article_info.pop(article_id))
 
     def deal_request(self, name):
         web.header('Content-Type','text/html;charset=UTF-8')
 
-        data_json = json.loads(json.dumps(web.input()))
+        data_json = web.input()
         data = data_json.get('data') # data为str
         req_url = data_json.get('req_url')
-
-        # log.debug('''
-        #     method : %s
-        #     data   ：%s
-        #     '''%(name, data))
 
         log.debug('''
             method : %s
             url   ：%s
             '''%(name, req_url))
 
-        reponse = ''
+        reponse = None
         if name == 'get_article_list':
             reponse = self.get_article_list(data, req_url)
 
@@ -560,11 +555,14 @@ class WechatAction():
         elif name == 'get_comment':
             reponse = self.get_comment(data, req_url)
 
-        # log.debug('''
-        #     ---------reponse---------
-        #     %s'''%reponse)
+        elif name == 'tip':
+            reponse = self.__open_next_page()
 
-        return reponse # 此处返回''空字符串  不会触发node-js http 的回调
+        log.debug('''
+            ---------reponse---------
+            %s'''%reponse)
+
+        return reponse or self.__open_next_page()# 此处返回''空字符串  不会触发node-js http 的回调
 
     def GET(self, name):
         return self.deal_request(name)
