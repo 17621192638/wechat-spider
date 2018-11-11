@@ -31,8 +31,8 @@ from service.wechat_service import WechatService
 
 MIN_SLEEP_TIME = 5000 # 每个历史列表、文章详情时间间隔  毫秒
 MAX_SLEEP_TIME = 10000
-MIN_WAIT_TIME = 10000# * 60 * 60 * 1 # 做完所有公众号后休息的时间，然后做下一轮
-MAX_WAIT_TIME = 10000 #* 60 * 60 * 2
+MIN_WAIT_TIME = 100000# * 60 * 60 * 1 # 做完所有公众号后休息的时间，然后做下一轮
+MAX_WAIT_TIME = 100000 #* 60 * 60 * 2
 
 ONLY_TODAY_MSG = int(tools.get_conf_value('config.conf', 'spider', 'only_today_msg'))
 SPIDER_START_TIME = tools.get_conf_value('config.conf', 'spider', 'spider_start_time')
@@ -133,6 +133,7 @@ class WechatAction():
                 result() #执行回调
             else:
                 url = result
+                break
 
         if not url:
             # 跳转到下一个公众号
@@ -167,7 +168,7 @@ class WechatAction():
             sleep_time:     %s
             next_start_time %s
             '''%(url, is_done, tip_sleep_time, tip_next_start_time))
-        next_page = "下次刷新时间 %s<script>setTimeout(function(){window.location.href='%s';},%d);</script>"%(tip_next_start_time, url, sleep_time)
+        next_page = "休眠 %s 下次刷新时间 %s<script>setTimeout(function(){window.location.href='%s';},%d);</script>"%(tip_sleep_time, tip_next_start_time, url, sleep_time)
         return next_page
 
     def __parse_account_info(self, data, req_url):
@@ -446,18 +447,18 @@ class WechatAction():
                 print('被验证不实的文章，不会请求观看点赞数，此时直接入库')
                 WechatAction._wechat_service.add_article_info(WechatAction._article_info.pop(article_id))
 
-            # 如果下一页是文章列表的链接， 替换文章列表中的appmsg_token,防止列表链接过期
-            if (len(WechatAction._todo_urls) == 1) and ('/mp/profile_ext' in WechatAction._todo_urls[-1]):
-                regex = 'appmsg_token = "(.*?)"'
-                appmsg_token = tools.get_info(data, regex, fetch_one = True).strip()
+            # 如果下一页是文章列表的链接， 替换文章列表中的appmsg_token,防止列表链接过期 不爬历史， 不替换了， 否则需要考虑callback
+            # if (len(WechatAction._todo_urls) == 1) and ('/mp/profile_ext' in WechatAction._todo_urls[-1]):
+            #     regex = 'appmsg_token = "(.*?)"'
+            #     appmsg_token = tools.get_info(data, regex, fetch_one = True).strip()
 
-                WechatAction._todo_urls[-1] =  tools.replace_str(WechatAction._todo_urls[-1], 'appmsg_token=.*?&', 'appmsg_token=%s&'%appmsg_token)
-
-            return self.__open_next_page()
+            #     WechatAction._todo_urls[-1] =  tools.replace_str(WechatAction._todo_urls[-1], 'appmsg_token=.*?&', 'appmsg_token=%s&'%appmsg_token)
 
         else:
             # 无文章内容
             pass
+
+        return self.__open_next_page()
 
     def get_read_watched_count(self, data, req_url):
         '''
@@ -542,7 +543,8 @@ class WechatAction():
             url   ：%s
             '''%(name, req_url))
 
-        reponse = None
+        # reponse = " 休眠 0小时0分9秒 下次刷新时间 2018-11-11 17:44:14<script>setTimeout(function(){window.location.href='https://mp.weixin.qq.com/mp/profile_ext?action=home&__biz=MjM5NDcxNzAwMw==&scene=124#wechat_redirect';},9762);</script>"
+        response = ''
         if name == 'get_article_list':
             reponse = self.get_article_list(data, req_url)
 
@@ -562,7 +564,7 @@ class WechatAction():
             ---------reponse---------
             %s'''%reponse)
 
-        return reponse or self.__open_next_page()# 此处返回''空字符串  不会触发node-js http 的回调
+        return reponse # 此处返回''空字符串  不会触发node-js http 的回调
 
     def GET(self, name):
         return self.deal_request(name)
