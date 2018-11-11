@@ -77,31 +77,28 @@ class CheckNewArticle():
     def check_new_article(self, account):
         oralce_id, account_id, account_name, last_article_release_time, biz = account
 
-        data = (oralce_id, account_id, account_name, last_article_release_time, biz)
-        self._redisdb.sadd('wechat:account', data)
+        article_release_time = self._wechat_sogo.get_article_release_time(account_id = account_id, account = account_name)
+        print(article_release_time)
+        if article_release_time:
+            last_article_release_time = last_article_release_time or ''
+            if article_release_time >= tools.get_current_date('%Y-%m-%d') and article_release_time > last_article_release_time:
+                print('{} 有新文章发布，等待抓取。 发布时间：{}'.format(account_name, article_release_time))
 
-        # article_release_time = self._wechat_sogo.get_article_release_time(account_id = account_id, account = account_name)
-        # print(article_release_time)
-        # if article_release_time:
-        #     last_article_release_time = last_article_release_time or ''
-        #     if article_release_time >= tools.get_current_date('%Y-%m-%d') and article_release_time > last_article_release_time:
-        #         print('{} 有新文章发布，等待抓取。 发布时间：{}'.format(account_name, article_release_time))
+                sql = '''
+                    update TAB_IOPM_SITE t set t.spider_status = 601,
+                     t.last_article_release_time =
+                           to_date('{}', 'yyyy-mm-dd hh24:mi:ss')
+                     where id = {}
+                '''.format(article_release_time, oralce_id)
 
-        #         sql = '''
-        #             update TAB_IOPM_SITE t set t.spider_status = 601,
-        #              t.last_article_release_time =
-        #                    to_date('{}', 'yyyy-mm-dd hh24:mi:ss')
-        #              where id = {}
-        #         '''.format(article_release_time, oralce_id)
+                # 多线程， 数据库需每个线程持有一个
+                oracledb = OracleDB()
+                oracledb.update(sql)
+                oracledb.close()
 
-        #         # 多线程， 数据库需每个线程持有一个
-        #         oracledb = OracleDB()
-        #         oracledb.update(sql)
-        #         oracledb.close()
-
-        #         # 入redis， 作为微信爬虫的任务池
-        #         data = (oralce_id, account_id, account_name, last_article_release_time, biz)
-        #         self._redisdb.sadd('wechat:account', data)
+                # 入redis， 作为微信爬虫的任务池
+                data = (oralce_id, account_id, account_name, last_article_release_time, biz)
+                self._redisdb.sadd('wechat:account', data)
 
 
 if __name__ == '__main__':

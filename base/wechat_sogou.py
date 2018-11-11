@@ -41,8 +41,8 @@ class WechatSogou():
             "Host": "weixin.sogou.com"
         }
 
-        # proxies = ip_proxies.get_proxies()
-        # headers["User-Agent"] = ip_proxies.get_user_agent()
+        proxies = ip_proxies.get_proxies()
+        headers["User-Agent"] = ip_proxies.get_user_agent()
 
         url = 'http://weixin.sogou.com/weixin?type=1&s_from=input&query=%s&ie=utf8&_sug_=n&_sug_type_='%(keyword)
         html, request = tools.get_html_by_requests(url, headers = headers)#, proxies = proxies)
